@@ -136,7 +136,7 @@ function usage() {
   echo
   echo -e "${BOLD}Examples:${RESET}"
   echo -e "  wt init              # create .worktreeinclude and .worktreesymlink config files"
-  echo -e "  wt add my-feature    # creates branch + worktree at ../my-feature, applies include/symlink files"
+  echo -e "  wt add my-feature    # creates branch + worktree (location set by WT_WORKTREE_DIR, default: ../my-feature)"
   echo -e "  wt ls                # navigate to a worktree interactively"
   echo -e "  wt ls my-feature     # print path of the my-feature worktree"
   echo -e "  wt rm my-feature     # delete the my-feature worktree (asks first)"
@@ -158,7 +158,15 @@ function cmd_add() {
   local main
   main=$(get_main_worktree)
   local dest
-  dest=$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/"$name"
+  if [ -n "${WT_WORKTREE_DIR:-}" ]; then
+    if [[ "$WT_WORKTREE_DIR" = /* ]]; then
+      dest="$WT_WORKTREE_DIR/$name"
+    else
+      dest="$main/$WT_WORKTREE_DIR/$name"
+    fi
+  else
+    dest=$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/"$name"
+  fi
 
   git worktree add -b "$name" "$dest"
   echo -e "${GREEN}Worktree created:${RESET} $dest  (branch: $name)"

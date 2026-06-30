@@ -7,8 +7,8 @@ A simple worktree management utility with fzf-powered navigation.
 | Command | Description |
 |---|---|
 | `wt init` | Create `.worktreeinclude` and `.worktreesymlink` config files in the main worktree (skips if they already exist) |
-| `wt add <name>` | Create a new worktree + branch at `../<name>`, apply `.worktreeinclude` and `.worktreesymlink`, and navigate to it |
-| `wt ls [name]` | Navigate to worktree `<name>`, or pick one with fzf |
+| `wt add <name>` | Create a new worktree + branch, apply `.worktreeinclude` and `.worktreesymlink`, and navigate to it |
+| `wt ls [name]` | Navigate to a worktree with fzf, or print the path of `<name>` |
 | `wt rm [name] [-f]` | Delete worktree `<name>`; without a name: the current worktree, or pick with fzf when run from the main worktree. `-f` skips confirmation |
 | `wt setup` | Apply `.worktreeinclude` / `.worktreesymlink` in an existing worktree — only needed for worktrees not created with `wt add` (which runs this automatically) |
 | `wt unsymlink` | Remove symlinks created from `.worktreesymlink` |
@@ -63,6 +63,36 @@ frontend/*/node_modules
 
 The `frontend/*/node_modules` glob will match `frontend/app-a/node_modules`, `frontend/app-b/node_modules`, etc.
 
+## Worktree location
+
+By default, `wt add <name>` creates the worktree as a sibling of the main repo:
+
+```
+parent/
+  my-repo/        ← main worktree
+  my-feature/     ← created by wt add my-feature
+```
+
+To use a different location, set `WT_WORKTREE_DIR` in your `~/.zshrc`:
+
+```zsh
+# Inside the repo (add to .gitignore):
+export WT_WORKTREE_DIR=.worktrees       # → my-repo/.worktrees/my-feature
+export WT_WORKTREE_DIR=worktrees        # → my-repo/worktrees/my-feature
+
+# Sibling directory:
+export WT_WORKTREE_DIR=../worktrees     # → parent/worktrees/my-feature
+
+# Absolute path:
+export WT_WORKTREE_DIR=/tmp/worktrees   # → /tmp/worktrees/my-feature
+```
+
+If you use an in-repo location (no leading `../`), add it to `.gitignore`:
+
+```
+.worktrees/
+```
+
 ## Requirements
 
 - [fzf](https://github.com/junegunn/fzf) — `brew install fzf` (only for the interactive picker)
@@ -77,6 +107,8 @@ The `frontend/*/node_modules` glob will match `frontend/app-a/node_modules`, `fr
 Creates a throwaway git repository in a temp directory, exercises all commands through their non-interactive forms, and asserts on filesystem state and output. No fzf needed.
 
 ## Installation
+
+> **Note:** `install.sh` only supports zsh (writes to `~/.zshrc`). Bash users should follow the manual installation below.
 
 ```bash
 git clone https://github.com/dagjomar/git-worktrees.git
