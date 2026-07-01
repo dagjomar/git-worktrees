@@ -2,12 +2,43 @@
 
 A simple worktree management utility with fzf-powered navigation.
 
+## Why `wt`?
+
+**Starting a new feature:**
+
+| Plain `git worktree` | `wt` |
+|---|---|
+| `git worktree add -b my-feature ../my-feature` | `wt add my-feature` |
+| `cd ../my-feature` | ✅ *auto-navigates* |
+| `cp ../my-repo/frontend/.env.local frontend/` | ✅ *ignored files auto-copied* |
+| `cd frontend && yarn install` | ✅ *node_modules symlinked — skip this* |
+| `yarn dev` | `yarn dev` |
+| work, commit, push… | work, commit, push… |
+| `cd ../my-repo` | |
+| `git worktree remove ../my-feature` | `wt rm` |
+| `git branch -d my-feature` | ✅ *prompts to delete branch* |
+
+**Reviewing a remote branch:**
+
+| Plain `git worktree` | `wt` |
+|---|---|
+| `git fetch origin` | `git fetch origin` |
+| `git worktree add -b review ../review origin/feat` | `wt add review origin/feat` |
+| `cd ../review` | ✅ *auto-navigates* |
+| `cp ../my-repo/frontend/.env.local frontend/` | ✅ *ignored files auto-copied* |
+| `cd frontend && yarn install` | ✅ *node_modules symlinked — skip this* |
+| `yarn dev` | `yarn dev` |
+| review… | review… |
+| `cd ../my-repo` | |
+| `git worktree remove ../review` | `wt rm` |
+| `git branch -d review` | ✅ *prompts to delete branch* |
+
 ## Commands
 
 | Command | Description |
 |---|---|
 | `wt init` | Create `.worktreeinclude` and `.worktreesymlink` config files in the main worktree (skips if they already exist) |
-| `wt add <name>` | Create a new worktree + branch, apply `.worktreeinclude` and `.worktreesymlink`, and navigate to it |
+| `wt add <name> [branch]` | Create a new worktree, apply `.worktreeinclude` and `.worktreesymlink`, and navigate to it. Without `branch`: creates a new local branch `<name>`. With `branch` (e.g. `origin/feat`): checks out that branch directly — no extra local branch created |
 | `wt ls [name]` | Navigate to a worktree with fzf, or print the path of `<name>` |
 | `wt rm [name] [-f]` | Delete worktree `<name>`; without a name: the current worktree, or pick with fzf when run from the main worktree. `-f` skips confirmation |
 | `wt setup` | Apply `.worktreeinclude` / `.worktreesymlink` in an existing worktree — only needed for worktrees not created with `wt add` (which runs this automatically) |
