@@ -82,6 +82,9 @@ function assert_not_exists() {
 # Layout: $TEST_DIR/main-repo is the main worktree; `wt add` creates sibling
 # worktrees inside $TEST_DIR, so everything is cleaned up together.
 function setup_sandbox() {
+  # Isolate from any environment variable that would change worktree placement
+  unset WT_WORKTREE_DIR
+
   TEST_DIR=$(mktemp -d)
   # Resolve symlinks (on macOS /var is a symlink to /private/var) so path
   # assertions match what git reports.
@@ -499,6 +502,135 @@ function test_add_in_repo_without_config_files() {
   assert_equals "wt-plain" "$branch" "Branch created without config files present"
 }
 
+function test_add_with_start_point_local_branch() {
+  echo
+  echo "── test: wt add <name> <branch> checks out the specified branch, no ghost branch ──"
+  cd "$MAIN"
+  git branch feat-start-point
+
+  local output
+  output=$("$WT" add wt-review-local feat-start-point)
+
+  assert_dir "$TEST_DIR/wt-review-local" "Worktree directory created"
+  local branch
+  branch=$(git -C "$TEST_DIR/wt-review-local" rev-parse --abbrev-ref HEAD)
+  assert_equals "feat-start-point" "$branch" "Worktree is on the specified branch, not the worktree dir name"
+  assert_contains "$output" "branch: feat-start-point" "Output reports the actual branch name"
+
+  if git -C "$MAIN" branch --list wt-review-local | grep -q "wt-review-local"; then
+    fail "Ghost branch 'wt-review-local' must not be created"
+  fi
+  echo "✅ No ghost branch created for the worktree dir name"
+
+  "$WT" rm wt-review-local --force < /dev/null > /dev/null
+  git branch -d feat-start-point
+}
+
+function test_add_with_remote_start_point() {
+  echo
+  echo "── test: wt add <name> origin/<branch> checks out remote branch, no ghost branch ──"
+  local repo="$TEST_DIR/remote-add-repo"
+  local bare="$TEST_DIR/remote-add-repo.git"
+  mkdir "$repo"
+  cd "$repo"
+  git init -q -b main
+  git config --local user.email "test@example.com"
+  git config --local user.name "Test User"
+  echo "# remote add test" > README.md
+  git add . && git commit -qm "init"
+
+  git init --bare -q "$bare"
+  git remote add origin "$bare"
+  git push -q origin main
+
+  git checkout -q -b remote-feat
+  echo "remote feature content" > feat.txt
+  git add . && git commit -qm "Remote feature"
+  git push -q origin remote-feat
+  git checkout -q main
+  git branch -D remote-feat
+  git fetch -q origin
+
+  local output
+  output=$("$WT" add wt-remote-review origin/remote-feat)
+
+  local wt="$TEST_DIR/wt-remote-review"
+  assert_dir "$wt" "Worktree directory created"
+  local branch
+  branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
+  assert_equals "remote-feat" "$branch" "Worktree is on remote-feat, not the worktree dir name"
+  assert_contains "$output" "branch: remote-feat" "Output reports the remote branch name"
+  assert_file "$wt/feat.txt" "Remote branch content present in worktree"
+
+  if git -C "$repo" branch --list wt-remote-review | grep -q "wt-remote-review"; then
+    fail "Ghost branch 'wt-remote-review' must not be created"
+  fi
+  echo "✅ No ghost branch created for the worktree dir name"
+
+  "$WT" rm wt-remote-review --force < /dev/null > /dev/null
+  git branch -d remote-feat 2>/dev/null || true
+}
+
+function test_rm_suggests_branch_deletion_confirmed() {
+  echo
+  echo "── test: wt rm prompts to delete branch after removal; user says y → branch deleted ──"
+  cd "$MAIN"
+  "$WT" add wt-branch-del-yes > /dev/null
+
+  # Prompts in order: confirm delete, force (dirty worktree), delete branch
+  local output
+  output=$(printf "y\ny\ny\n" | "$WT" rm wt-branch-del-yes)
+
+  assert_not_exists "$TEST_DIR/wt-branch-del-yes" "Worktree removed"
+  assert_contains "$output" "Deleted branch: wt-branch-del-yes" "Branch deletion reported"
+
+  if git -C "$MAIN" branch --list wt-branch-del-yes | grep -q "wt-branch-del-yes"; then
+    fail "Branch wt-branch-del-yes should have been deleted"
+  fi
+  echo "✅ Branch deleted after worktree removal"
+}
+
+function test_rm_suggests_branch_deletion_declined() {
+  echo
+  echo "── test: wt rm prompts to delete branch; user says n → branch preserved ──"
+  cd "$MAIN"
+  "$WT" add wt-branch-del-no > /dev/null
+
+  # Prompts: confirm delete, force (dirty), decline branch deletion
+  local output
+  output=$(printf "y\ny\nn\n" | "$WT" rm wt-branch-del-no)
+
+  assert_not_exists "$TEST_DIR/wt-branch-del-no" "Worktree removed"
+
+  if ! git -C "$MAIN" branch --list wt-branch-del-no | grep -q "wt-branch-del-no"; then
+    fail "Branch wt-branch-del-no should still exist after declining deletion"
+  fi
+  echo "✅ Branch preserved after declining branch deletion prompt"
+
+  git branch -d wt-branch-del-no
+}
+
+function test_rm_force_skips_branch_prompt() {
+  echo
+  echo "── test: wt rm --force does not prompt for branch deletion ──"
+  cd "$MAIN"
+  "$WT" add wt-branch-force-skip > /dev/null
+
+  local output
+  output=$("$WT" rm wt-branch-force-skip --force < /dev/null)
+
+  assert_not_exists "$TEST_DIR/wt-branch-force-skip" "Worktree removed"
+  assert_contains "$output" "Removed:" "Removal reported"
+
+  # Branch must still exist — no prompt was shown
+  if ! git -C "$MAIN" branch --list wt-branch-force-skip | grep -q "wt-branch-force-skip"; then
+    fail "Branch should still exist when --force skips branch prompt"
+  fi
+  echo "✅ Branch preserved — no branch prompt issued in --force mode"
+
+  git branch -d wt-branch-force-skip
+}
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 echo "Setting up sandbox..."
 setup_sandbox
@@ -531,6 +663,11 @@ test_add_without_name_errors
 test_unknown_command_errors
 test_add_from_subdirectory
 test_add_in_repo_without_config_files
+test_add_with_start_point_local_branch
+test_add_with_remote_start_point
+test_rm_suggests_branch_deletion_confirmed
+test_rm_suggests_branch_deletion_declined
+test_rm_force_skips_branch_prompt
 
 echo
 echo "🎉 All tests passed!"

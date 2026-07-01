@@ -4,7 +4,9 @@
 # A git worktree helper with fzf-powered navigation.
 #
 # Commands:
-#   wt add <name>        Create a new worktree + branch at ../<name>, then run setup automatically
+#   wt add <name> [<branch>]  Create a new worktree at ../<name>, then run setup automatically.
+#                             With <branch> (e.g. origin/feat): checks out that branch directly
+#                             (no extra local branch created). Without: creates a new branch <name>.
 #   wt init              Create .worktreeinclude and .worktreesymlink config files (main worktree only)
 #   wt ls [name]         Print path of worktree <name>, or pick with fzf
 #   wt rm [name] [-f]    Delete worktree <name>; without a name: the current
@@ -118,14 +120,15 @@ function usage() {
   echo -e "                       (then customize them for your project)"
   echo
   echo -e "${BOLD}Daily usage:${RESET}"
-  echo -e "  wt ${CYAN}add${RESET} <name>        Add a new worktree: runs setup to copy files and symlinks based on"
+  echo -e "  wt ${CYAN}add${RESET} <name> [branch]  Add a new worktree: runs setup to copy files and symlinks based on"
   echo -e "                       configuration files, and navigates to the worktree"
   echo -e "  wt ${CYAN}rm${RESET}                Use when done with the worktree: removes the current worktree and"
   echo -e "                       navigates back to the main repo"
   echo
   echo -e "${BOLD}All commands:${RESET}"
   echo -e "  wt ${CYAN}init${RESET}              Create .worktreeinclude and .worktreesymlink config files (main worktree only)"
-  echo -e "  wt ${CYAN}add${RESET} <name>        Create a new worktree + branch at ../<name>, then run setup automatically"
+  echo -e "  wt ${CYAN}add${RESET} <name> [branch]  Create a new worktree at ../<name>, optionally checking out an existing"
+  echo -e "                         branch (e.g. origin/feat). Without branch: creates a new local branch <name>."
   echo -e "  wt ${CYAN}ls${RESET} [name]         Print path of worktree <name>, or pick with fzf"
   echo -e "  wt ${CYAN}rm${RESET} [name] [-f]    Delete worktree <name>; without a name: the current worktree,"
   echo -e "                       or pick with fzf when run from the main worktree. -f skips confirmation"
@@ -136,7 +139,8 @@ function usage() {
   echo
   echo -e "${BOLD}Examples:${RESET}"
   echo -e "  wt init              # create .worktreeinclude and .worktreesymlink config files"
-  echo -e "  wt add my-feature    # creates branch + worktree (location set by WT_WORKTREE_DIR, default: ../my-feature)"
+  echo -e "  wt add my-feature               # creates branch + worktree (location set by WT_WORKTREE_DIR)"
+  echo -e "  wt add review-feat origin/feat  # worktree dir 'review-feat', checks out branch 'feat' from origin"
   echo -e "  wt ls                # navigate to a worktree interactively"
   echo -e "  wt ls my-feature     # print path of the my-feature worktree"
   echo -e "  wt rm my-feature     # delete the my-feature worktree (asks first)"
@@ -149,9 +153,10 @@ function usage() {
 # ── Commands ──────────────────────────────────────────────────────────────────
 function cmd_add() {
   local name="${1:-}"
+  local start_point="${2:-}"
   if [ -z "$name" ]; then
     echo "Error: missing worktree name."
-    echo "Usage: wt add <name>"
+    echo "Usage: wt add <name> [<branch>]"
     exit 1
   fi
 
@@ -168,8 +173,22 @@ function cmd_add() {
     dest=$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/"$name"
   fi
 
-  git worktree add -b "$name" "$dest"
-  echo -e "${GREEN}Worktree created:${RESET} $dest  (branch: $name)"
+  if [ -n "$start_point" ]; then
+    if [[ "$start_point" == */* ]]; then
+      # Remote ref (e.g. origin/fare_changelog): derive local branch name and track
+      local branch_name="${start_point#*/}"
+      git worktree add -b "$branch_name" "$dest" "$start_point"
+      git -C "$dest" branch --set-upstream-to="$start_point" "$branch_name" 2>/dev/null || true
+    else
+      # Local branch: check out directly, no new branch created
+      git worktree add "$dest" "$start_point"
+    fi
+  else
+    git worktree add -b "$name" "$dest"
+  fi
+  local branch
+  branch=$(git -C "$dest" branch --show-current 2>/dev/null || echo "$name")
+  echo -e "${GREEN}Worktree created:${RESET} $dest  (branch: $branch)"
 
   run_worktreeinclude "$main" "$dest"
   run_worktreesymlink "$main" "$dest"
@@ -304,9 +323,38 @@ function cmd_ls() {
     awk '{print $1}'
 }
 
+function maybe_delete_branch() {
+  local branch="$1"
+  local main="$2"
+  [ -z "$branch" ] && return 0
+  local main_branch
+  main_branch=$(git -C "$main" branch --show-current 2>/dev/null || echo "")
+  [ "$branch" = "$main_branch" ] && return 0
+  printf "Also delete branch '%s'? [y/N] " "$branch"
+  read -r branch_answer || true
+  if [[ "$branch_answer" =~ ^[Yy]$ ]]; then
+    if git branch -d "$branch" 2>/dev/null; then
+      echo -e "${GREEN}Deleted branch:${RESET} $branch"
+    else
+      printf "Branch has unmerged changes. Force delete? [y/N] "
+      read -r force_branch
+      if [[ "$force_branch" =~ ^[Yy]$ ]]; then
+        git branch -D "$branch"
+        echo -e "${GREEN}Force deleted branch:${RESET} $branch"
+      fi
+    fi
+  fi
+}
+
 function remove_worktree() {
   local selected="$1"
   local force="${2:-0}"
+
+  # Capture branch before removing (porcelain output is still valid after cd)
+  local branch
+  branch=$(git worktree list --porcelain | grep -A3 "^worktree $selected$" | grep '^branch ' | sed 's|branch refs/heads/||')
+  local main
+  main=$(get_main_worktree)
 
   if [ "$force" = "1" ]; then
     git worktree remove --force "$selected"
@@ -327,10 +375,12 @@ function remove_worktree() {
         echo -e "${GREEN}Force removed:${RESET} $selected"
       else
         echo "Aborted."
+        return 0
       fi
     else
       echo -e "${GREEN}Removed:${RESET} $selected"
     fi
+    maybe_delete_branch "$branch" "$main"
   else
     echo "Aborted."
   fi
